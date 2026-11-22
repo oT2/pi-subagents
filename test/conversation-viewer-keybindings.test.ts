@@ -19,6 +19,19 @@ const CTRL_HOME = "\x1b[1;5H";
 const CTRL_END = "\x1b[1;5F";
 const CTRL_LEFT = "\x1b[1;5D";
 const CTRL_RIGHT = "\x1b[1;5C";
+const CTRL_T = "\x14";
+const CTRL_G = "\x07";
+
+/**
+ * `app.thinking.toggle` is an app binding, defined by pi's own table rather than
+ * pi-tui's, so a test that wants it resolved has to declare it the way pi does.
+ */
+function createThinkingBindings(overrides: Record<string, unknown> = {}): KeybindingsManager {
+  return new KeybindingsManager({
+    ...TUI_KEYBINDINGS,
+    "app.thinking.toggle": { defaultKeys: "ctrl+t", description: "Toggle thinking blocks" },
+  }, overrides);
+}
 
 function createEmacsKeybindings(): KeybindingsManager {
   return new KeybindingsManager(TUI_KEYBINDINGS, {
@@ -95,6 +108,15 @@ describe("viewer-keys", () => {
       expect(keys.pageUp(SHIFT_UP)).toBe(true);
       expect(keys.pageDown(SHIFT_DOWN)).toBe(true);
     }
+  });
+
+  it("resolves the thinking toggle through app.thinking.toggle", () => {
+    expect(createViewerKeys().thinking(CTRL_T)).toBe(true);
+
+    const keys = createViewerKeys(createThinkingBindings({ "app.thinking.toggle": "ctrl+g" }));
+    expect(keys.thinking(CTRL_G)).toBe(true);
+    // The remap retires the default, so a stray ctrl+t cannot flip the transcript.
+    expect(keys.thinking(CTRL_T)).toBe(false);
   });
 
   it("manager with no user overrides behaves like the hardcoded defaults", () => {

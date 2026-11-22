@@ -676,6 +676,96 @@ describe("ConversationViewer", () => {
     });
   });
 
+  describe("thinking blocks", () => {
+    const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
+    const CTRL_T = "\x14";
+
+    function viewerWithThinking(thinking = "checking the failing test first", rows = 200) {
+      const messages = [{
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking },
+          { type: "text", text: "the answer" },
+        ],
+      }];
+      return new ConversationViewer(
+        mockTui(rows, 80), mockSession(messages), mockRecord({ status: "completed" }), undefined,
+        ansiTheme(), vi.fn(),
+      );
+    }
+
+    it("shows thinking by default, ahead of the answer", () => {
+      const content = ((viewerWithThinking() as any).buildContentLines(76) as string[]).map(strip);
+      const thinkingAt = content.findIndex(l => l.includes("checking the failing test first"));
+
+      expect(content.some(l => l.includes("[Thinking]"))).toBe(true);
+      expect(thinkingAt).toBeGreaterThan(-1);
+      // pi emits thinking before the text it produced it for.
+      expect(thinkingAt).toBeLessThan(content.findIndex(l => l.includes("the answer")));
+    });
+
+    it("ctrl+t hides thinking and leaves the answer alone, and again brings it back", () => {
+      const viewer = viewerWithThinking();
+
+      viewer.handleInput(CTRL_T);
+      const hidden = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+      expect(hidden.some(l => l.includes("checking the failing test"))).toBe(false);
+      expect(hidden.some(l => l.includes("[Thinking]"))).toBe(false);
+      expect(hidden.some(l => l.includes("the answer"))).toBe(true);
+
+      viewer.handleInput(CTRL_T);
+      expect(((viewer as any).buildContentLines(76) as string[]).map(strip)
+        .some(l => l.includes("checking the failing test"))).toBe(true);
+    });
+
+    it("renders nothing for a redacted or whitespace-only thinking part", () => {
+      const messages = [{
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "", redacted: true, thinkingSignature: "opaque" },
+          // Only the empty check catches the part above; this one is what makes
+          // the trim in the filter load-bearing.
+          { type: "thinking", thinking: "   \n " },
+          { type: "text", text: "the answer" },
+        ],
+      }];
+      const viewer = new ConversationViewer(
+        mockTui(200, 80), mockSession(messages), mockRecord({ status: "completed" }), undefined,
+        ansiTheme(), vi.fn(),
+      );
+      const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+
+      expect(content.some(l => l.includes("[Thinking]"))).toBe(false);
+      expect(content.some(l => l.includes("the answer"))).toBe(true);
+    });
+
+    // Thinking is the largest block an agent writes, and the raw path (`m` off)
+    // re-wraps every block every frame, so it is bounded like a tool result.
+    it("caps thinking at RESULT_MAX_CHARS and says what it dropped", () => {
+      const lines = Array.from({ length: 3000 }, (_, i) => `think ${i}`);
+      const viewer = viewerWithThinking(lines.join("\n"), 4000);
+      const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+
+      expect(content.some(l => l.includes("think 100"))).toBe(true);
+      expect(content.some(l => l.includes("think 2999"))).toBe(false);
+      expect(content).toContain("... (truncated, 15.9k more characters)");
+    });
+
+    // An assistant message carries both blocks, so one `Markdown` per message
+    // would `setText()` between them on every render: re-parsing both per
+    // keystroke, and one block's parse failure forcing the other to the raw path.
+    it("keeps a separate Markdown per block of the same message", () => {
+      const viewer = viewerWithThinking();
+
+      viewer.render(80);
+      expect(markdownConstructions).toBe(2);
+      // Cached, not rebuilt, across re-renders.
+      viewer.render(80);
+      viewer.render(80);
+      expect(markdownConstructions).toBe(2);
+    });
+  });
+
   describe("safety net against upstream wrapTextWithAnsi bugs", () => {
     // These tests call buildContentLines() directly (via the private method)
     // because render() has its own truncation via row(). The safety net in

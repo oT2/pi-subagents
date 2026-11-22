@@ -37,6 +37,9 @@ interface ToolBlock {
   width?: number;
 }
 
+/** One `Markdown` per message object, keyed by whichever map owns that block. */
+type MarkdownCache = WeakMap<object, { md: Markdown; text: string; failed?: boolean }>;
+
 /**
  * Whether pi's global theme is initialized.
  *
@@ -212,6 +215,9 @@ export class ConversationViewer implements Component, Focusable {
   private composer: Input | undefined;
   /** Resolved once: pi's Markdown theme is fixed for the life of the process. */
   private readonly markdownTheme: MarkdownTheme;
+  /** `dim` and `thinkingText` as functions, so a block reads alike raw or rendered. */
+  private readonly dimStyle = (text: string) => this.theme.fg("dim", text);
+  private readonly thinkingStyle = (text: string) => this.theme.fg("thinkingText", text);
   /** Set by the `m` key. Wins over the setting so `m` works without a persist hook. */
   private markdownModeOverride: ViewerMarkdownMode | undefined;
   /**
@@ -220,7 +226,14 @@ export class ConversationViewer implements Component, Focusable {
    * keystroke — the component caches, but only across calls to the same object.
    * Weak so a compacted-away message doesn't pin its render.
    */
-  private readonly markdownCache = new WeakMap<object, { md: Markdown; text: string; failed?: boolean }>();
+  private readonly markdownCache: MarkdownCache = new WeakMap();
+  /**
+   * Thinking is cached apart from the message's answer: an assistant message
+   * carries both, and sharing one `Markdown` would `setText()` between the two
+   * blocks on every render — re-parsing both per keystroke — and let one block's
+   * parse failure force the other to the raw path.
+   */
+  private readonly thinkingCache: MarkdownCache = new WeakMap();
   /** One block per tool call id, so a redraw reuses the component's own caches. */
   private readonly toolBlocks = new Map<string, ToolBlock>();
   /**
@@ -230,6 +243,12 @@ export class ConversationViewer implements Component, Focusable {
   private readonly toolRendering = piThemeAvailable();
   /** Whether tool blocks show their full output; toggled with pi's expand key. */
   private toolsExpanded = false;
+  /**
+   * Whether thinking blocks render. Default on, like pi's own transcript
+   * (`hideThinkingBlock` defaults to false); toggled with pi's
+   * `app.thinking.toggle`. Viewer-local, like {@link toolsExpanded}.
+   */
+  private thinkingShown = true;
 
   constructor(
     private tui: TUI,
@@ -352,6 +371,15 @@ export class ConversationViewer implements Component, Focusable {
       return;
     }
     if (this.stopArmed) this.stopArmed = false;
+
+    // Show or hide thinking — the same key, and the same meaning, as in the main
+    // transcript. Nothing to invalidate: visibility only gates whether a block is
+    // asked for, and each block keeps its own parsed render.
+    if (this.keys.thinking(data)) {
+      this.thinkingShown = !this.thinkingShown;
+      this.tui.requestRender();
+      return;
+    }
 
     // Unfold tool output — the same key, and the same meaning, as in the main
     // transcript. It is what the renderers' own elision notices refer to.
@@ -649,14 +677,24 @@ export class ConversationViewer implements Component, Focusable {
   }
 
   /** Wrap `text` literally — the pre-Markdown path, and the fallback from it. */
-  private rawLines(text: string, width: number, dim: boolean): string[] {
+  private rawLines(text: string, width: number, style?: (text: string) => string): string[] {
     const lines = wrapTextWithAnsi(text, width);
-    return dim ? lines.map(l => this.theme.fg("dim", l)) : lines;
+    return style ? lines.map(style) : lines;
   }
 
-  /** Render `text` as Markdown, reusing this message's component instance. */
-  private markdownLines(msg: AgentSession["messages"][number], text: string, width: number, dim: boolean): string[] {
-    let entry = this.markdownCache.get(msg);
+  /**
+   * Render `text` as Markdown, reusing the `Markdown` this block already owns in
+   * `cache`. `style` tints the whole block, raw fallback included, or is omitted
+   * for text that takes the theme's default foreground.
+   */
+  private markdownLines(
+    cache: MarkdownCache,
+    msg: AgentSession["messages"][number],
+    text: string,
+    width: number,
+    style?: (text: string) => string,
+  ): string[] {
+    let entry = cache.get(msg);
     if (!entry) {
       entry = {
         md: new Markdown(
@@ -664,16 +702,16 @@ export class ConversationViewer implements Component, Focusable {
           0,
           0,
           this.markdownTheme,
-          // Keeps result prose visually receded, the way the raw path's
-          // per-line `fg("dim", …)` did. Fenced code is the exception and is
-          // left alone deliberately: pi's theme highlights it with its own
-          // colors, which this would otherwise flatten.
-          dim ? { color: (t: string) => this.theme.fg("dim", t) } : undefined,
+          // Keeps a block visually receded, the way the raw path's per-line
+          // `fg("dim", …)` did. Fenced code is the exception and is left alone
+          // deliberately: pi's theme highlights it with its own colors, which
+          // this would otherwise flatten.
+          style ? { color: style } : undefined,
           MARKDOWN_OPTIONS,
         ),
         text,
       };
-      this.markdownCache.set(msg, entry);
+      cache.set(msg, entry);
     } else if (entry.text !== text) {
       // Streaming: the message object is stable, its text grows. A failed
       // prefix remains unsafe after append-only deltas, so retry only when the
@@ -683,7 +721,7 @@ export class ConversationViewer implements Component, Focusable {
       entry.text = text;
       if (shouldRetry) entry.failed = false;
     }
-    if (entry.failed) return this.rawLines(text, width, dim);
+    if (entry.failed) return this.rawLines(text, width, style);
 
     try {
       return entry.md.render(width);
@@ -695,7 +733,7 @@ export class ConversationViewer implements Component, Focusable {
       // fine — degrade to that instead, and remember, since the throw would
       // otherwise repeat on every render and every scroll key.
       entry.failed = true;
-      return this.rawLines(text, width, dim);
+      return this.rawLines(text, width, style);
     }
   }
 
@@ -803,18 +841,35 @@ export class ConversationViewer implements Component, Focusable {
         }
       } else if (msg.role === "assistant") {
         const textParts: string[] = [];
+        const thinkingParts: string[] = [];
         const toolCalls: ToolCallPart[] = [];
         for (const c of msg.content) {
           if (c.type === "text" && c.text) textParts.push(c.text);
+          else if (c.type === "thinking" && c.thinking.trim()) thinkingParts.push(c.thinking.trim());
           else if (c.type === "toolCall") toolCalls.push(c);
         }
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
+        // Only a part with text renders: a redacted part carries just its
+        // signature, and a whitespace-only one would print a label over nothing.
+        // Runs are joined because this loop already flattens the message — text,
+        // then its calls.
+        if (this.thinkingShown && thinkingParts.length > 0) {
+          // Capped like a tool result: thinking is the largest block an agent
+          // writes, and under `m` raw every frame re-wraps all of them (~50 ms a
+          // keystroke over a long run), where the Markdown path only pays once.
+          const { text, elided } = capResult(thinkingParts.join("\n\n"));
+          lines.push(th.fg("dim", "[Thinking]"));
+          lines.push(...(mode === "off"
+            ? this.rawLines(text, width, this.thinkingStyle)
+            : this.markdownLines(this.thinkingCache, msg, text, width, this.thinkingStyle)));
+          if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
+        }
         if (textParts.length > 0) {
           const text = textParts.join("\n").trim();
           lines.push(...(mode === "off"
-            ? this.rawLines(text, width, false)
-            : this.markdownLines(msg, text, width, false)));
+            ? this.rawLines(text, width)
+            : this.markdownLines(this.markdownCache, msg, text, width)));
         }
         for (const call of toolCalls) {
           if (!this.toolRendering) {
@@ -839,8 +894,8 @@ export class ConversationViewer implements Component, Focusable {
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("dim", "[Result]"));
         lines.push(...(mode === "all"
-          ? this.markdownLines(msg, text, width, true)
-          : this.rawLines(text, width, true)));
+          ? this.markdownLines(this.markdownCache, msg, text, width, this.dimStyle)
+          : this.rawLines(text, width, this.dimStyle)));
         if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
       } else if ((msg as any).role === "bashExecution") {
         const bash = msg as any;
@@ -850,7 +905,7 @@ export class ConversationViewer implements Component, Focusable {
           // Same cap as a tool result, never Markdown: command output is the one
           // thing here that is definitionally not authored as Markdown.
           const { text, elided } = capResult(bash.output.trim());
-          lines.push(...this.rawLines(text, width, true));
+          lines.push(...this.rawLines(text, width, this.dimStyle));
           if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
         }
       } else {

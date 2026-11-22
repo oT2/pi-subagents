@@ -1,11 +1,11 @@
 /**
- * viewer-keys.ts — Scroll, expand and jump key matchers for the conversation viewer.
+ * viewer-keys.ts — Scroll, expand, thinking and jump key matchers for the conversation viewer.
  *
- * Resolves `tui.select.*`, `app.tools.expand` and the `tui.altScreen.top`/
- * `tui.altScreen.bottom` jump keys through the user's keybindings when pi
- * provides a manager, falling back to the previous hardcoded keys otherwise. The
- * viewer's k/j, shift+arrow and home/end aliases always work alongside whatever
- * is bound.
+ * Resolves `tui.select.*`, `app.tools.expand`, `app.thinking.toggle` and the
+ * `tui.altScreen.top`/`tui.altScreen.bottom` jump keys through the user's
+ * keybindings when pi provides a manager, falling back to the previous hardcoded
+ * keys otherwise. The viewer's k/j, shift+arrow and home/end aliases always work
+ * alongside whatever is bound.
  */
 
 import { type KeyId, matchesKey } from "@earendil-works/pi-tui";
@@ -17,6 +17,7 @@ export type ViewerKeybindingId =
   | "tui.select.pageUp"
   | "tui.select.pageDown"
   | "app.tools.expand"
+  | "app.thinking.toggle"
   | "tui.altScreen.top"
   | "tui.altScreen.bottom";
 
@@ -33,6 +34,8 @@ export interface ViewerKeys {
   pageDown(data: string): boolean;
   /** Unfold the output of the viewer's tool blocks, as in the main transcript. */
   expand(data: string): boolean;
+  /** Show or hide the assistant's thinking blocks, as in the main transcript. */
+  thinking(data: string): boolean;
   /** Scroll to the start of the conversation (`tui.altScreen.top`). */
   top(data: string): boolean;
   /** Jump to the latest message and resume following (`tui.altScreen.bottom`). */
@@ -68,6 +71,7 @@ export function createViewerKeys(keybindings?: ViewerKeybindings): ViewerKeys {
     pageUp: (data) => matches(data, "tui.select.pageUp", "pageUp") || matchesKey(data, "shift+up"),
     pageDown: (data) => matches(data, "tui.select.pageDown", "pageDown") || matchesKey(data, "shift+down"),
     expand: (data) => matches(data, "app.tools.expand", "ctrl+o"),
+    thinking: (data) => matches(data, "app.thinking.toggle", "ctrl+t"),
     // The configurable binding only; the home/end aliases stay at the call sites
     // so the fullscreen "end only when not composing" rule is preserved.
     top: (data) => matches(data, "tui.altScreen.top", "home"),
