@@ -698,24 +698,26 @@ describe("ConversationViewer", () => {
       const content = ((viewerWithThinking() as any).buildContentLines(76) as string[]).map(strip);
       const thinkingAt = content.findIndex(l => l.includes("checking the failing test first"));
 
-      expect(content.some(l => l.includes("[Thinking]"))).toBe(true);
       expect(thinkingAt).toBeGreaterThan(-1);
+      // pi renders the thinking itself, with no marker while it is shown.
+      expect(content.some(l => l.includes("Thinking..."))).toBe(false);
       // pi emits thinking before the text it produced it for.
       expect(thinkingAt).toBeLessThan(content.findIndex(l => l.includes("the answer")));
     });
 
-    it("ctrl+t hides thinking and leaves the answer alone, and again brings it back", () => {
+    it("ctrl+t collapses thinking to pi's marker and again expands it", () => {
       const viewer = viewerWithThinking();
 
       viewer.handleInput(CTRL_T);
       const hidden = ((viewer as any).buildContentLines(76) as string[]).map(strip);
       expect(hidden.some(l => l.includes("checking the failing test"))).toBe(false);
-      expect(hidden.some(l => l.includes("[Thinking]"))).toBe(false);
+      expect(hidden).toContain("Thinking...");
       expect(hidden.some(l => l.includes("the answer"))).toBe(true);
 
       viewer.handleInput(CTRL_T);
-      expect(((viewer as any).buildContentLines(76) as string[]).map(strip)
-        .some(l => l.includes("checking the failing test"))).toBe(true);
+      const shown = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+      expect(shown.some(l => l.includes("checking the failing test"))).toBe(true);
+      expect(shown.some(l => l.includes("Thinking..."))).toBe(false);
     });
 
     it("renders nothing for a redacted or whitespace-only thinking part", () => {
@@ -735,8 +737,14 @@ describe("ConversationViewer", () => {
       );
       const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
 
-      expect(content.some(l => l.includes("[Thinking]"))).toBe(false);
+      expect(content.some(l => l.includes("Thinking..."))).toBe(false);
       expect(content.some(l => l.includes("the answer"))).toBe(true);
+
+      // The marker is gated on the same check: an empty run collapses to nothing,
+      // not to a marker claiming there is thinking underneath.
+      viewer.handleInput("\x14");
+      expect(((viewer as any).buildContentLines(76) as string[]).map(strip)
+        .some(l => l.includes("Thinking..."))).toBe(false);
     });
 
     // Thinking is the largest block an agent writes, and the raw path (`m` off)

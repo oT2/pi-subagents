@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **The conversation viewer shows what an agent was thinking.** An agent's thinking blocks were dropped from its transcript, so the reasoning it spent its thinking budget on was readable only in pi's own transcript — which a background agent never opens. They now render above the answer under `[Thinking]`, in pi's `thinkingText` colour. `ctrl+t` hides them for the rest of that viewing: the same key as the main transcript, resolved through `app.thinking.toggle`, so a remap is honoured. Per viewing rather than a setting — reopening the overlay shows them again. A thinking part redacted by a safety filter carries no text, and renders nothing. Thinking is bounded at the same 16k characters a tool result is — it is the largest block an agent writes, and a longer one shows the usual truncation notice.
+- **The conversation viewer shows what an agent was thinking.** An agent's thinking blocks were dropped from its transcript, so the reasoning it spent its thinking budget on was readable only in pi's own transcript — which a background agent never opens. They now render above the answer in pi's `thinkingText` colour, and `ctrl+t` collapses each one to pi's `Thinking...` marker — the same collapsed form and the same key as the main transcript, resolved through `app.thinking.toggle` so a remap is honoured. Per viewing rather than a setting — reopening the overlay shows them again. A thinking part redacted by a safety filter carries no text, and renders nothing. Thinking is bounded at the same 16k characters a tool result is — it is the largest block an agent writes, and a longer one shows the usual truncation notice.
 
 ## [0.26.2] - 2026-11-20
 

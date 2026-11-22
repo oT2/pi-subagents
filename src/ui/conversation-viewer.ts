@@ -101,6 +101,15 @@ const MARKDOWN_MODE_LABELS: Record<ViewerMarkdownMode, string> = {
   all: "md+",
 };
 
+/** pi's collapsed-thinking marker (`InteractiveMode.defaultHiddenThinkingLabel`). */
+const HIDDEN_THINKING_LABEL = "Thinking...";
+
+/**
+ * Italic, written as raw SGR because pi's `Theme.italic` is outside this viewer's
+ * `Theme` subset — the same reason `fallbackMarkdownTheme` spells it out.
+ */
+const italic = (text: string) => `\x1b[3m${text}\x1b[23m`;
+
 /**
  * Both options keep the renderer from *rewriting* source that only looks like
  * Markdown: without them `3) a / 7) b / 9) c` comes back renumbered `3. 4. 5.`
@@ -244,9 +253,11 @@ export class ConversationViewer implements Component, Focusable {
   /** Whether tool blocks show their full output; toggled with pi's expand key. */
   private toolsExpanded = false;
   /**
-   * Whether thinking blocks render. Default on, like pi's own transcript
-   * (`hideThinkingBlock` defaults to false); toggled with pi's
-   * `app.thinking.toggle`. Viewer-local, like {@link toolsExpanded}.
+   * Whether thinking blocks render their text. Default on, like pi's own
+   * transcript (`hideThinkingBlock` defaults to false); toggled with pi's
+   * `app.thinking.toggle`, and off collapses each run to {@link
+   * HIDDEN_THINKING_LABEL} the way pi does. Viewer-local, like {@link
+   * toolsExpanded}.
    */
   private thinkingShown = true;
 
@@ -851,19 +862,23 @@ export class ConversationViewer implements Component, Focusable {
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
         // Only a part with text renders: a redacted part carries just its
-        // signature, and a whitespace-only one would print a label over nothing.
+        // signature, and a whitespace-only one would print a marker over nothing.
         // Runs are joined because this loop already flattens the message — text,
         // then its calls.
-        if (this.thinkingShown && thinkingParts.length > 0) {
-          // Capped like a tool result: thinking is the largest block an agent
-          // writes, and under `m` raw every frame re-wraps all of them (~50 ms a
-          // keystroke over a long run), where the Markdown path only pays once.
-          const { text, elided } = capResult(thinkingParts.join("\n\n"));
-          lines.push(th.fg("dim", "[Thinking]"));
-          lines.push(...(mode === "off"
-            ? this.rawLines(text, width, this.thinkingStyle)
-            : this.markdownLines(this.thinkingCache, msg, text, width, this.thinkingStyle)));
-          if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
+        if (thinkingParts.length > 0) {
+          if (this.thinkingShown) {
+            // Capped like a tool result: thinking is the largest block an agent
+            // writes, and under `m` raw every frame re-wraps all of them (~50 ms a
+            // keystroke over a long run), where the Markdown path only pays once.
+            const { text, elided } = capResult(thinkingParts.join("\n\n"));
+            lines.push(...(mode === "off"
+              ? this.rawLines(text, width, this.thinkingStyle)
+              : this.markdownLines(this.thinkingCache, msg, text, width, this.thinkingStyle)));
+            if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
+          } else {
+            // pi's collapsed form: one italic marker for the run, never its text.
+            lines.push(italic(this.thinkingStyle(HIDDEN_THINKING_LABEL)));
+          }
         }
         if (textParts.length > 0) {
           const text = textParts.join("\n").trim();
